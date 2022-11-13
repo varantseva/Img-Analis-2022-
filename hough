@@ -1,0 +1,114 @@
+import sys, os.path, cv2, numpy as np
+
+
+def gradient_img(img: np.ndarray) -> np.ndarray:
+    hor_grad = (img[1:, :] - img[:-1, :])[:, :-1]
+    ver_grad = (img[:, 1:] - img[:, :-1])[:-1:, :]
+    magnitude = np.sqrt(hor_grad ** 2 + ver_grad ** 2)
+    return magnitude
+
+
+def hough_transform(
+        img: np.ndarray,
+        n_rhos: int,
+        n_thetas: int
+) -> (np.ndarray, np.ndarray, np.ndarray):
+
+    width, height = img.shape
+    thetas = np.arange(-np.pi / 2, np.pi / 2, np.pi/n_thetas)
+    rho_max = np.sqrt(width ** 2 + height ** 2)
+    rhos = np.linspace(-rho_max, rho_max, n_rhos)
+    ht_map = np.zeros((len(rhos), len(thetas)))
+    sin = np.sin(thetas)
+    cos = np.cos(thetas)
+
+    for i in range(width):
+        for j in range(height):
+            px = img[i][j]
+            if px:
+                for k in range(len(thetas)):
+                    r = i * sin[k] + j * cos[k]
+                    index_r = int(np.where(rhos == min(rhos, key=lambda x: abs(x - r)))[0])
+                    ht_map[index_r][k] += px
+    return ht_map.astype(np.uint32), rhos, thetas
+
+def get_lines(
+        ht_map: np.ndarray,
+        n_lines: int,
+        min_rho_line_diff: int,
+        min_theta_line_diff: int,
+) -> np.ndarray:
+    points_value = []
+    # uniq = set()
+    for i in range(ht_map.shape[0]):
+        for j in range(ht_map.shape[1]):
+            current = ht_map[i][j]
+            # uniq.update(current)
+            if current == 0:
+                continue
+
+            # if len(uniq) == 1:
+            #     return points_value
+
+            for k in range(n_lines):
+                if len(points_value) != n_lines:
+                    points_value.append((current, i, j))
+                    break
+
+                current_max = points_value[k]
+                if current > current_max[0]:
+                    for l in range(n_lines):
+                        if l == k:
+                            continue
+
+                        is_out_rho = np.fabs(points_value[l][1] - i) > min_rho_line_diff
+                        is_out_theta = np.fabs(points_value[l][2] - j) > min_theta_line_diff
+                        if is_out_theta and is_out_rho:
+                            points_value[k] = (current, i, j)
+                            break
+                    break
+
+    coords = [[cur[1], cur[2]] for cur in points_value]
+
+    return coords
+
+def main():
+    assert len(sys.argv) == 9
+    src_path, dst_ht_path, dst_lines_path, n_rhos, n_thetas, \
+        n_lines, min_rho_line_diff, min_theta_line_diff = sys.argv[1:]
+
+    n_rhos = int(n_rhos)
+    assert n_rhos > 0
+
+    n_thetas = int(n_thetas)
+    assert n_thetas > 0
+
+    n_lines = int(n_lines)
+    assert n_lines > 0
+
+    min_rho_line_diff = int(min_rho_line_diff)
+    assert min_rho_line_diff > 0
+
+    min_theta_line_diff = int(min_theta_line_diff)
+    assert min_theta_line_diff > 0
+
+    assert os.path.exists(src_path)
+    img = cv2.imread(src_path, cv2.IMREAD_GRAYSCALE)
+    assert img is not None
+
+    gradient = gradient_img(img.astype(np.float32))
+    ht_map, rhos, thetas = hough_transform(img, n_rhos, n_thetas)
+
+    dst_ht_map = ht_map.astype(np.float32)
+    dst_ht_map /= dst_ht_map.max() / 255
+    dst_ht_map = dst_ht_map.round().astype(np.uint8)
+    cv2.imwrite(dst_ht_path, dst_ht_map)
+
+    lines = get_lines(ht_map, n_lines, min_rho_line_diff, min_theta_line_diff)
+    with open(dst_lines_path, 'w') as fout:
+        for rho_idx, theta_idx in lines:
+            fout.write(f'{rhos[rho_idx]:.3f}, {thetas[theta_idx]:.3f}\n')
+
+
+if __name__ == '__main__':
+    main()
